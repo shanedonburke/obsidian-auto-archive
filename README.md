@@ -17,3 +17,7 @@ It's highly configurable: you specify which notes should be archived, where they
 1. Open the Settings window.
 2. Go to the _Auto Archive_ tab.
 3. Add one or more archive configurations, and you're good to go!
+
+# Attribution
+
+This plugin uses code from the [Period Notes](https://github.com/liamcain/obsidian-periodic-notes) plugin by Liam Cain. Buy Liam a coffee [here](https://www.buymeacoffee.com/liamcain).
