@@ -6,7 +6,7 @@ It's highly configurable: you specify which notes should be archived, where they
 
 # Installation
 
-1. Open the Settings window.
+1. Open the Settings window in Obsidian.
 2. Go to the _Community plugins_ tab.
 3. Click _Browse_.
 4. Search for "Auto Archive", then click _Install_.
