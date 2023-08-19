@@ -1,9 +1,9 @@
 {
 	"id": "auto-archive",
 	"name": "Auto Archive",
-	"version": "1.0.0",
+	"version": "1.0.5",
 	"minAppVersion": "0.15.0",
-	"description": "Automatically archive notes on a schedule",
+	"description": "Automatically archive notes once they reach a certain age",
 	"author": "Shane Burke",
 	"authorUrl": "https://github.com/shanedonburke",
 	"isDesktopOnly": false
