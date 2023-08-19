@@ -51,18 +51,21 @@ export default class AutoArchivePlugin extends Plugin {
 	}
 
 	async processVault(): Promise<void> {
-		const allFiles = this.app.vault.getMarkdownFiles();
-
 		const archiveConfigs = this.getValidArchiveConfigs();
 
 		// Process every user-configured archive
 		for (const archiveConfig of archiveConfigs) {
-			const allSourceFiles = allFiles
-				.filter((file) => this.doesFileBelongToArchiveConfig(file, archiveConfig));
+			const sourceFolder = await this.app.vault.getAbstractFileByPath(archiveConfig.sourceFolder);
 
-			// Process each file in this config's source folder
-			for (const sourceFile of allSourceFiles) {
-				await this.processSourceFile(sourceFile, archiveConfig);
+			if (sourceFolder instanceof TFolder) {
+				const sourceFiles = this.getMarkdownFilesInFolderRecursive(sourceFolder);
+
+				// Process each file in this config's source folder
+				for (const sourceFile of sourceFiles) {
+					await this.processSourceFile(sourceFile, archiveConfig);
+				}
+			} else {
+				console.warn(`Auto Archive: Configured source [${sourceFolder?.path}] is not a folder`);
 			}
 		}
 	}
@@ -100,6 +103,20 @@ export default class AutoArchivePlugin extends Plugin {
 				await this.deleteEmptyFolders(sourceFile, archiveConfig);
 			}
 		}
+	}
+
+	getMarkdownFilesInFolderRecursive(folder: TFolder): TFile[] {
+		const files: TFile[] = [];
+
+		for (const child of folder.children) {
+			if (child instanceof TFile && child.name.endsWith(".md")) {
+				files.push(child)
+			} else if (child instanceof TFolder) {
+				files.push(...this.getMarkdownFilesInFolderRecursive(child));
+			}
+		}
+
+		return files;
 	}
 
 	/**
