@@ -1,8 +1,21 @@
-/*
+.aa-folder-search .search-input-container {
+  width: 100%;
+  max-width: 300px;
+}
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+.aa-h2 {
+  font-size: 22px !important;
+}
 
-If your plugin does not need CSS, delete this file.
+.aa-new-config-btn {
+  margin-top: 10px;
+  width: 200px;
+}
 
-*/
+.aa-delete-btn {
+  background-color: #ed3434 !important;
+}
+
+.aa-delete-btn:hover {
+  background-color: #f05656 !important;
+}

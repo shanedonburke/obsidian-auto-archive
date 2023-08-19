@@ -1,89 +1,274 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { FolderSuggest } from "Suggest/FolderSuggest";
+import { App, Plugin, PluginSettingTab, Setting, TFile, TFolder } from "obsidian";
 
-// Remember to rename these classes and interfaces!
-
-interface MyPluginSettings {
-	mySetting: string;
+interface ArchiveConfig {
+	sourceFolder: string;
+	destFolder: string;
+	maintainFolderStructure: boolean;
+	deleteEmptyFolders: boolean;
+	days: number;
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+interface AutoArchivePluginSettings {
+	archiveConfigs: ArchiveConfig[];
 }
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+const DEFAULT_SETTINGS: AutoArchivePluginSettings = {
+	archiveConfigs: [],
+};
+
+const MIN_DAYS = 1; // Min. value for `days` setting
+const INITIAL_PROCESS_WAIT_MS = 10 * 1000; // Wait before first process
+const PROCESS_INTERVAL_MS = 60 * 1000; // Interval to process files
+const NUM_MS_IN_DAY = 86400000;
+
+export default class AutoArchivePlugin extends Plugin {
+	settings: AutoArchivePluginSettings;
 
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
+		this.addSettingTab(new AutoArchiveSettingTab(this.app, this));
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
+		// Wait a bit before first process to give Obsidian time to load files
+		this.registerInterval(
+			window.setTimeout(this.processVault.bind(this), INITIAL_PROCESS_WAIT_MS)
+		);
+		
+		// Process all relevant files at regular interval
+		this.registerInterval(
+			window.setInterval(this.processVault.bind(this), PROCESS_INTERVAL_MS)
+		);
+	}
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
+	getValidArchiveConfigs(): ArchiveConfig[] {
+		return this.settings.archiveConfigs
+		.filter((config) => config.sourceFolder.trim().length > 0 && config.destFolder.trim().length > 0);
+	}
+
+	doesFileBelongToArchiveConfig(file: TFile, archiveConfig: ArchiveConfig): boolean {
+		return file.path.startsWith(archiveConfig.sourceFolder);
+	}
+
+	async processVault(): Promise<void> {
+		const allFiles = this.app.vault.getMarkdownFiles();
+
+		const archiveConfigs = this.getValidArchiveConfigs();
+
+		// Process every user-configured archive
+		for (const archiveConfig of archiveConfigs) {
+			const allSourceFiles = allFiles
+				.filter((file) => this.doesFileBelongToArchiveConfig(file, archiveConfig));
+
+			// Process each file in this config's source folder
+			for (const sourceFile of allSourceFiles) {
+				await this.processSourceFile(sourceFile, archiveConfig);
 			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+		}
+	}
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
+	/**
+	 * Evaluates a file in a configured source folder, archiving it if necessary.
+	 * 
+	 * @param sourceFile 
+	 * @param archiveConfig 
+	 */
+	async processSourceFile(sourceFile: TFile, archiveConfig: ArchiveConfig): Promise<void> {
+		if (this.shouldFileBeArchived(sourceFile, archiveConfig)) {
+			// Construct path for file in archive
+			let newFilePath = archiveConfig.destFolder;
+
+			if (archiveConfig.maintainFolderStructure) {
+				const filePathInSourceFolder = this.getFilePathInSourceFolder(sourceFile, archiveConfig);
+				newFilePath = this.joinPaths(newFilePath, filePathInSourceFolder);
+
+				// Source folder structure may not exist in archive folder.
+				await this.createFoldersInPath(newFilePath);
+			} else {
+				newFilePath = this.joinPaths(newFilePath, sourceFile.name);
+			}
+
+			const existingArchiveFile = this.app.vault.getAbstractFileByPath(newFilePath);
+			if (existingArchiveFile != null) {
+				await this.app.vault.delete(existingArchiveFile);
+			}
+
+			await this.copyFile(sourceFile, newFilePath);
+			await this.app.vault.delete(sourceFile);
+
+			if (archiveConfig.deleteEmptyFolders) {
+				await this.deleteEmptyFolders(sourceFile, archiveConfig);
+			}
+		}
+	}
+
+	/**
+	 * Determines whether the given file is due for archival.
+	 * 
+	 * @param sourceFile 
+	 * @param archiveConfig 
+	 * @returns true if the file should be archived
+	 */
+	shouldFileBeArchived(sourceFile: TFile, archiveConfig: ArchiveConfig): boolean {
+		const today = new Date();
+		const createdDate = new Date(sourceFile.stat.ctime);
+		const cutoffDate = new Date(today.getTime() - NUM_MS_IN_DAY * archiveConfig.days);
+		
+		return createdDate < cutoffDate;
+	}
+
+	/**
+	 * Given a file that was just archived, deletes all empty sub-folders of the source folder
+	 * leading up to it. This should be used with the `deleteEmptyFolders` setting.
+	 * 
+	 * Example: If a file `DailyNotes/2023/December/31.md` in a source folder `DailyNotes` was just archived and
+	 * `2023` and `December` are now empty, then both of those folders will be deleted.
+	 * `DailyNotes` will remain.
+	 * 
+	 * @param deletedFile 
+	 * @param archiveConfig 
+	 */
+	async deleteEmptyFolders(deletedFile: TFile, archiveConfig: ArchiveConfig) {
+		const filePathInSourceFolder = this.getFilePathInSourceFolder(deletedFile, archiveConfig);
+
+		// Folder of source file WITHOUT the source folder itself.
+		// Ex. a file "Notes/2023/mynote.md" in a source folder "Notes" will produce "2023".
+		const sourceFileFolderPath = this.getFolderFromPath(filePathInSourceFolder);
+
+		const folderPathParts = this.splitPathString(sourceFileFolderPath);
+
+		// Walk backwards through the folders leading up to the moved file's old location,
+		// excluding the source folder and its parents.
+		// If any of the folders are now empty, delete them.
+		// This is done so that you aren't left with a bunch of empty folders for past weeks/months, etc.
+		if (folderPathParts.length > 0) {
+			const numPathParts = folderPathParts.length;
+
+			for (let i = 0; i < numPathParts; i++) {
+				const currDirPath = this.joinPaths(archiveConfig.sourceFolder, folderPathParts.join("/"));
+				const abstractFolder = this.app.vault.getAbstractFileByPath(currDirPath);
+
+				if (abstractFolder instanceof TFolder && abstractFolder.children.length === 0) {
+					// Folder is empty
+					await this.app.vault.delete(abstractFolder, true);
 				}
+
+				folderPathParts.pop();
 			}
-		});
-
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+		}
 	}
 
-	onunload() {
+	/**
+	 * Joins two paths, e.g. `joinPaths("source", "folder")` returns "source/folder".
+	 * 
+	 * @param p1 
+	 * @param p2 
+	 * @returns joined path
+	 */
+	joinPaths(p1: string, p2: string): string {
+		let p1Trimmed = p1.trim();
+		while (p1Trimmed.endsWith("/")) {
+			p1Trimmed = p1Trimmed.slice(0, p1Trimmed.length - 1);
+		}
 
+		let p2Trimmed = p2.trim();
+		while (p2Trimmed.startsWith("/")) {
+			p2Trimmed = p2Trimmed.slice(1);
+		}
+		while (p2Trimmed.endsWith("/")) {
+			p2Trimmed = p2Trimmed.slice(0, p2Trimmed.length - 1);
+		}
+
+		if (p1Trimmed.length === 0 && p2Trimmed.length === 0) {
+			return "";
+		} else if (p1Trimmed.length === 0) {
+			return p2Trimmed;
+		} else if (p2Trimmed.length === 0) {
+			return p1Trimmed;
+		}
+
+		return p1Trimmed + "/" + p2Trimmed;
 	}
+
+	/**
+	 * If file path is `Notes/2023/mynote.md` in a source folder `Notes`, produces `2023/mynote.md`.
+	 * 
+	 * @param sourceFile 
+	 * @param archiveConfig 
+	 * @returns file path
+	 */
+	getFilePathInSourceFolder(sourceFile: TFile, archiveConfig: ArchiveConfig) {
+		return sourceFile.path.replace(archiveConfig.sourceFolder, "")
+	}
+
+	/**
+	 * Splits a file path into an array of its parts (folders or files).
+	 * 
+	 * @param path 
+	 * @returns split path
+	 */
+	splitPathString(path: string): string[] {
+		return path.split("/").filter((segment) => segment.length > 0)
+	}
+
+	/**
+	 * If a folder path is given, it's returned as-is.
+	 * If a file path is given, the folder path leading up to it is returned.
+	 * If a file path is given with no preceding folders, an empty string is returned.
+	 * 
+	 * @param fileOrFolderPath
+	 * @returns folder path
+	 */
+	getFolderFromPath(fileOrFolderPath: string): string {
+		if (!fileOrFolderPath.endsWith(".md")) {
+			// Already a folder path
+			return fileOrFolderPath;
+		}
+
+		if (!fileOrFolderPath.contains("/")) {
+			// Just a file name
+			return "";
+		}
+
+		return fileOrFolderPath.slice(0, fileOrFolderPath.lastIndexOf("/"));
+	}
+
+	/**
+	 * Copies a file to a new location.
+	 * 
+	 * @param file 
+	 * @param newFilePath 
+	 */
+	async copyFile(file: TFile, newFilePath: string) {
+		try {
+			await this.app.vault.copy(file, newFilePath);
+		} catch (e) {
+			// Nothing - produces random "destination file already exists" errors
+		}
+	}
+
+	/**
+	 * Given a file or folder path, creates all folders in the path.
+	 * 
+	 * @param fileOrFolderPath File or folder path
+	 */
+	async createFoldersInPath(fileOrFolderPath: string) {
+		try {
+			// This creates all folders in the path.
+			await this.app.vault.createFolder(this.getFolderFromPath(fileOrFolderPath));
+		} catch (e) {
+			// Nothing - folder already exists
+		}
+	}
+
+	onunload() {}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings = Object.assign(
+			{},
+			DEFAULT_SETTINGS,
+			await this.loadData()
+		);
 	}
 
 	async saveSettings() {
@@ -91,44 +276,130 @@ export default class MyPlugin extends Plugin {
 	}
 }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
+class AutoArchiveSettingTab extends PluginSettingTab {
+	plugin: AutoArchivePlugin;
 
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
-
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
-
-	constructor(app: App, plugin: MyPlugin) {
+	constructor(app: App, plugin: AutoArchivePlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
 
 	display(): void {
-		const {containerEl} = this;
+		const { containerEl } = this;
 
 		containerEl.empty();
 
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
+		containerEl.createEl("h1", { text: "Configurations" });
+
+		this.plugin.settings.archiveConfigs.forEach((config, i) => {
+			containerEl.createEl("h2", { text: `Configuration ${i + 1}`, cls: "aa-h2" });
+
+			new Setting(containerEl)
+				.setName("Source Folder")
+				.setDesc("Archive notes from this folder")
+				.addSearch((cb) => {
+					new FolderSuggest(cb.inputEl),
+						cb
+							.setPlaceholder("Example: work/notes")
+							.setValue(config.sourceFolder)
+							.onChange((newFolder) => {
+								config.sourceFolder = newFolder;
+								this.plugin.saveSettings();
+							});
+				})
+				.setClass("aa-folder-search");
+
+			new Setting(containerEl)
+				.setName("Archive Folder")
+				.setDesc("Move notes to this folder")
+				.addSearch((cb) => {
+					new FolderSuggest(cb.inputEl),
+						cb
+							.setPlaceholder("Example: work/note_archive")
+							.setValue(config.destFolder)
+							.onChange((newFolder) => {
+								config.destFolder = newFolder;
+								this.plugin.saveSettings();
+							});
+				})
+				.setClass("aa-folder-search");
+
+			new Setting(containerEl)
+				.setName("Maintain Folder Structure")
+				.setDesc("Maintain the source folder's hierarchy in the archive?")
+				.addToggle((cb) => {
+					cb
+						.setValue(config.maintainFolderStructure)
+						.onChange((value) => {
+							config.maintainFolderStructure = value;
+							this.plugin.saveSettings();
+						});
+				});
+
+				new Setting(containerEl)
+				.setName("Auto-Delete Empty Folders")
+				.setDesc("Delete folders from which all notes have been archived?")
+				.addToggle((cb) => {
+					cb
+						.setValue(config.deleteEmptyFolders)
+						.onChange((value) => {
+							config.deleteEmptyFolders = value;
+							this.plugin.saveSettings();
+						});
+				});
+
+			new Setting(containerEl)
+				.setName("Archive After X Days")
+				.setDesc("Age of note in days when archival will occur")
+				.addText((cb) => {
+					// On blur, reset input value to config
+					// (Non-numbers stripped out and empty value replaced)
+					cb.inputEl.addEventListener("blur", () => {
+						cb.setValue(config.days.toString());
+					});
+
+					cb
+						.setValue(config.days.toString())
+						.onChange((value) => {
+							// Strip out non-numbers
+							const numbersOnly = value.replace(/[^0-9]+/g, "");
+							let newDays = Number(numbersOnly);
+							
+							if (newDays === 0) {
+								newDays = MIN_DAYS;
+							}
+
+							config.days = newDays;
+							this.plugin.saveSettings();
+						});
+				});
+
+			new Setting(containerEl).addButton((cb) => {
+				cb.setButtonText("Delete Config")
+					.setClass("aa-delete-btn")
+					.onClick(() => {
+						this.plugin.settings.archiveConfigs.splice(i, 1);
+						this.plugin.saveSettings();
+						this.display();
+					});
+			});
+		});
+
+		new Setting(containerEl).addButton((cb) => {
+			cb.setButtonText("Add Archive Config")
+				.setCta()
+				.setClass("aa-new-config-btn")
+				.onClick(() => {
+					this.plugin.settings.archiveConfigs.push({
+						sourceFolder: "",
+						destFolder: "",
+						maintainFolderStructure: true,
+						deleteEmptyFolders: true,
+						days: 30
+					});
+					this.plugin.saveSettings();
+					this.display();
+				});
+		});
 	}
 }
