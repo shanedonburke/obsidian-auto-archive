@@ -306,13 +306,11 @@ class AutoArchiveSettingTab extends PluginSettingTab {
 
 		containerEl.empty();
 
-		containerEl.createEl("h1", { text: "Configurations" });
-
 		this.plugin.settings.archiveConfigs.forEach((config, i) => {
 			containerEl.createEl("h2", { text: `Configuration ${i + 1}`, cls: "aa-h2" });
 
 			new Setting(containerEl)
-				.setName("Source Folder")
+				.setName("Source folder")
 				.setDesc("Archive notes from this folder")
 				.addSearch((cb) => {
 					new FolderSuggest(cb.inputEl),
@@ -327,7 +325,7 @@ class AutoArchiveSettingTab extends PluginSettingTab {
 				.setClass("aa-folder-search");
 
 			new Setting(containerEl)
-				.setName("Archive Folder")
+				.setName("Archive folder")
 				.setDesc("Move notes to this folder")
 				.addSearch((cb) => {
 					new FolderSuggest(cb.inputEl),
@@ -342,7 +340,7 @@ class AutoArchiveSettingTab extends PluginSettingTab {
 				.setClass("aa-folder-search");
 
 			new Setting(containerEl)
-				.setName("Maintain Folder Structure")
+				.setName("Maintain folder structure")
 				.setDesc("Maintain the source folder's hierarchy in the archive?")
 				.addToggle((cb) => {
 					cb
@@ -354,7 +352,7 @@ class AutoArchiveSettingTab extends PluginSettingTab {
 				});
 
 				new Setting(containerEl)
-				.setName("Auto-Delete Empty Folders")
+				.setName("Auto-delete empty folders")
 				.setDesc("Delete folders from which all notes have been archived?")
 				.addToggle((cb) => {
 					cb
@@ -366,7 +364,7 @@ class AutoArchiveSettingTab extends PluginSettingTab {
 				});
 
 			new Setting(containerEl)
-				.setName("Archive After X Days")
+				.setName("Archive after X days")
 				.setDesc("Age of note in days when archival will occur")
 				.addText((cb) => {
 					// On blur, reset input value to config
@@ -392,7 +390,7 @@ class AutoArchiveSettingTab extends PluginSettingTab {
 				});
 
 			new Setting(containerEl).addButton((cb) => {
-				cb.setButtonText("Delete Config")
+				cb.setButtonText("Delete config")
 					.setClass("aa-delete-btn")
 					.onClick(() => {
 						this.plugin.settings.archiveConfigs.splice(i, 1);
@@ -403,7 +401,7 @@ class AutoArchiveSettingTab extends PluginSettingTab {
 		});
 
 		new Setting(containerEl).addButton((cb) => {
-			cb.setButtonText("Add Archive Config")
+			cb.setButtonText("Add archive config")
 				.setCta()
 				.setClass("aa-new-config-btn")
 				.onClick(() => {
