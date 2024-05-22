@@ -6,6 +6,7 @@ interface ArchiveConfig {
 	destFolder: string;
 	maintainFolderStructure: boolean;
 	deleteEmptyFolders: boolean;
+	useLastModifiedDate: boolean;
 	days: number;
 }
 
@@ -128,10 +129,10 @@ export default class AutoArchivePlugin extends Plugin {
 	 */
 	shouldFileBeArchived(sourceFile: TFile, archiveConfig: ArchiveConfig): boolean {
 		const today = new Date();
-		const createdDate = new Date(sourceFile.stat.ctime);
+		const sourceDate = new Date(archiveConfig.useLastModifiedDate ? sourceFile.stat.mtime : sourceFile.stat.ctime);
 		const cutoffDate = new Date(today.getTime() - NUM_MS_IN_DAY * archiveConfig.days);
 		
-		return createdDate < cutoffDate;
+		return sourceDate < cutoffDate;
 	}
 
 	/**
@@ -351,17 +352,29 @@ class AutoArchiveSettingTab extends PluginSettingTab {
 						});
 				});
 
-				new Setting(containerEl)
-				.setName("Auto-delete empty folders")
-				.setDesc("Delete folders from which all notes have been archived?")
-				.addToggle((cb) => {
-					cb
-						.setValue(config.deleteEmptyFolders)
-						.onChange((value) => {
-							config.deleteEmptyFolders = value;
-							this.plugin.saveSettings();
-						});
-				});
+			new Setting(containerEl)
+			.setName("Auto-delete empty folders")
+			.setDesc("Delete folders from which all notes have been archived?")
+			.addToggle((cb) => {
+				cb
+					.setValue(config.deleteEmptyFolders)
+					.onChange((value) => {
+						config.deleteEmptyFolders = value;
+						this.plugin.saveSettings();
+					});
+			});
+
+			new Setting(containerEl)
+			.setName("Use last modified date instead of creation date")
+			.setDesc("Use last modified date to determine if the note should be archived")
+			.addToggle((cb) => {
+				cb
+					.setValue(config.useLastModifiedDate)
+					.onChange((value) => {
+						config.useLastModifiedDate = value;
+						this.plugin.saveSettings();
+					});
+			});
 
 			new Setting(containerEl)
 				.setName("Archive after X days")
@@ -410,6 +423,7 @@ class AutoArchiveSettingTab extends PluginSettingTab {
 						destFolder: "",
 						maintainFolderStructure: true,
 						deleteEmptyFolders: true,
+						useLastModifiedDate: false,
 						days: 30
 					});
 					this.plugin.saveSettings();
